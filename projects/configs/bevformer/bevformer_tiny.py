@@ -176,11 +176,31 @@ file_client_args = dict(backend='disk')
 
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='PhotoMetricDistortionMultiViewImage'),
+
+    dict(
+        type='RGB2RAWLikeUnprocessWoMosaic',
+        input_is_bgr=True,        # mmcv通常BGR
+        clip=True,
+        deterministic=False,       # 训练允许随机；如果你想完全可复现可设True
+        base_seed=0,
+        keep_meta=False,
+        import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
+    ),
+
+    # dict(type='PhotoMetricDistortionMultiViewImage'), # 先关掉，面向sRGB
+
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+
+    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    # 建议先用 identity normalize 保证链路稳定
+    dict(type='NormalizeMultiviewImage',
+         mean=[0.0, 0.0, 0.0],
+         std=[1.0, 1.0, 1.0],
+         to_rgb=False),  # 上面 transform 已输出 RGB
+
+
     dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
     dict(type='PadMultiViewImage', size_divisor=32),
     dict(type='DefaultFormatBundle3D', class_names=class_names),
@@ -189,7 +209,22 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=True),
-    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+
+    dict(
+        type='RGB2RAWLikeUnprocessWoMosaic',
+        input_is_bgr=True,        # mmcv通常BGR
+        clip=True,
+        deterministic=True,       # 训练允许随机；如果你想完全可复现可设True
+        base_seed=12345,
+        keep_meta=False,
+        import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
+    ),
+
+    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    dict(type='NormalizeMultiviewImage',
+         mean=[0.0, 0.0, 0.0],
+         std=[1.0, 1.0, 1.0],
+         to_rgb=False),  # 上面 transform 已输出 RGB
    
     dict(
         type='MultiScaleFlipAug3D',
