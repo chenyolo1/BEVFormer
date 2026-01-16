@@ -51,7 +51,7 @@ model = dict(
     type='BEVFormer',
     use_grid_mask=True,
     video_test_mode=True,
-    pretrained=dict(img='torchvision://resnet50'),
+    pretrained=dict(img='ckpts/resnet50-0676ba61.pth'),
     img_backbone=dict(
         type='ResNet',
         depth=50,
@@ -185,6 +185,8 @@ train_pipeline = [
         base_seed=0,
         keep_meta=False,
         import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
+        backend='torch',
+        device='cuda',
     ),
 
     # dict(type='PhotoMetricDistortionMultiViewImage'), # 先关掉，面向sRGB
@@ -218,6 +220,8 @@ test_pipeline = [
         base_seed=12345,
         keep_meta=False,
         import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
+        backend='torch',
+        device='cuda',
     ),
 
     # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
@@ -244,7 +248,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=4,
+    workers_per_gpu=12,
     train=dict(
         type=dataset_type,
         data_root=data_root,

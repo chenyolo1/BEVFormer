@@ -4,6 +4,11 @@ import os
 import cv2
 
 try:
+    import torch
+except Exception:
+    torch = None
+
+try:
     # mmdet2.x
     from mmdet.datasets.builder import PIPELINES
 except Exception:
@@ -38,6 +43,9 @@ class RGB2RAWLikeUnprocessWoMosaic:
         keep_meta=False,
         eps=1e-6,
         import_mode="third_party",  # "third_party" or "vendored"
+        backend="numpy", # "numpy" or "torch"
+        device="cuda",
+        allow_cuda_in_worker=False,
     ):
         self.input_is_bgr = input_is_bgr
         self.clip = clip
@@ -46,6 +54,9 @@ class RGB2RAWLikeUnprocessWoMosaic:
         self.keep_meta = keep_meta
         self.eps = float(eps)
         self.import_mode = import_mode
+        self.backend = backend
+        self.device = device
+        self.allow_cuda_in_worker = allow_cuda_in_worker
 
         # Import unprocess_wo_mosaic
         if import_mode == "third_party":
@@ -58,6 +69,19 @@ class RGB2RAWLikeUnprocessWoMosaic:
             raise ValueError(f"Unknown import_mode={import_mode}")
 
         self.unprocess_wo_mosaic = unprocess_wo_mosaic
+
+    def _get_device(self):
+        if self.backend != "torch":
+            return None
+        if torch is None:
+            raise RuntimeError("torch is required for backend='torch'.")
+        if self.device.startswith("cuda") and not self.allow_cuda_in_worker:
+            worker_info = torch.utils.data.get_worker_info()
+            if worker_info is not None:
+                return torch.device("cpu")
+        if self.device.startswith("cuda") and not torch.cuda.is_available():
+            return torch.device("cpu")
+        return torch.device(self.device)
 
     def _to_float01(self, img: np.ndarray) -> np.ndarray:
         x = img.astype(np.float32)
@@ -84,6 +108,103 @@ class RGB2RAWLikeUnprocessWoMosaic:
             np.random.set_state(st)
         return out
 
+    def _random_ccm_np(self, rng: np.random.RandomState) -> np.ndarray:
+        xyz2cams = np.array([
+            [[1.0234, -0.2969, -0.2266],
+             [-0.5625, 1.6328, -0.0469],
+             [-0.0703, 0.2188, 0.6406]],
+            [[0.4913, -0.0541, -0.0202],
+             [-0.613, 1.3513, 0.2906],
+             [-0.1564, 0.2151, 0.7183]],
+            [[0.838, -0.263, -0.0639],
+             [-0.2887, 1.0725, 0.2496],
+             [-0.0627, 0.1427, 0.5438]],
+            [[0.6596, -0.2079, -0.0562],
+             [-0.4782, 1.3016, 0.1933],
+             [-0.097, 0.1581, 0.5181]],
+        ], dtype=np.float32)
+        weights = rng.uniform(1e-8, 1e8, size=(len(xyz2cams), 1, 1)).astype(np.float32)
+        xyz2cam = np.sum(xyz2cams * weights, axis=0) / np.sum(weights, axis=0)
+        rgb2xyz = np.array(
+            [[0.4124564, 0.3575761, 0.1804375],
+             [0.2126729, 0.7151522, 0.0721750],
+             [0.0193339, 0.1191920, 0.9503041]],
+            dtype=np.float32,
+        )
+        rgb2cam = np.matmul(xyz2cam, rgb2xyz)
+        rgb2cam = rgb2cam / np.sum(rgb2cam, axis=-1, keepdims=True)
+        return rgb2cam.astype(np.float32)
+
+    def _random_gains_np(self, rng: np.random.RandomState):
+        rgb_gain = 1.0 / rng.normal(0.8, 0.1)
+        red_gain = rng.uniform(1.9, 2.4)
+        blue_gain = rng.uniform(1.5, 1.9)
+        return float(rgb_gain), float(red_gain), float(blue_gain)
+
+    def _unprocess_batch_torch(self, rgb01: np.ndarray, seeds, add_noise=False):
+        device = self._get_device()
+        if device is None:
+            raise RuntimeError("backend is not torch")
+
+        rgb2cam_list = []
+        rgb_gain_list = []
+        red_gain_list = []
+        blue_gain_list = []
+        noise_shot_list = []
+        noise_read_list = []
+
+        for seed in seeds:
+            rng = np.random.RandomState(seed) if self.deterministic else np.random
+            rgb2cam_list.append(self._random_ccm_np(rng))
+            rgb_gain, red_gain, blue_gain = self._random_gains_np(rng)
+            rgb_gain_list.append(rgb_gain)
+            red_gain_list.append(red_gain)
+            blue_gain_list.append(blue_gain)
+            if add_noise:
+                shot = rng.uniform(0.0001, 0.012)
+                log_shot = np.log(shot)
+                log_read = 2.18 * log_shot + 1.20 + rng.normal(0, 0.26)
+                noise_shot_list.append(shot)
+                noise_read_list.append(np.exp(log_read))
+
+        rgb2cam = torch.from_numpy(np.stack(rgb2cam_list)).to(device=device)
+        rgb_gain = torch.tensor(rgb_gain_list, device=device, dtype=torch.float32)
+        red_gain = torch.tensor(red_gain_list, device=device, dtype=torch.float32)
+        blue_gain = torch.tensor(blue_gain_list, device=device, dtype=torch.float32)
+
+        image = torch.from_numpy(rgb01).to(device=device, dtype=torch.float32)
+        image = image * 0.9
+        image = torch.clamp(image, 0.0, 1.0)
+        image = 0.5 - torch.sin(torch.asin(1.0 - 2.0 * image) / 3.0)
+        image = torch.clamp(image, min=1e-8) ** 2.2
+
+        image = image.reshape(image.shape[0], -1, 3)
+        image = torch.einsum("nvc,nkc->nvk", image, rgb2cam)
+        image = image.reshape(rgb01.shape)
+
+        gains = torch.stack(
+            (1.0 / red_gain, torch.ones_like(red_gain), 1.0 / blue_gain),
+            dim=-1,
+        ) / rgb_gain[:, None]
+        gains = gains[:, None, None, :]
+        gray = torch.mean(image, dim=-1, keepdim=True)
+        inflection = 0.9
+        mask = torch.clamp(gray - inflection, min=0.0) / (1.0 - inflection)
+        mask = mask ** 2.0
+        safe_gains = torch.maximum(mask + (1.0 - mask) * gains, gains)
+        image = image * safe_gains
+
+        image = torch.clamp(image, 0.0, 1.0)
+
+        if add_noise:
+            shot = torch.tensor(noise_shot_list, device=device, dtype=torch.float32)
+            read = torch.tensor(noise_read_list, device=device, dtype=torch.float32)
+            variance = image * shot[:, None, None, None] + read[:, None, None, None]
+            noise = torch.randn_like(image) * torch.sqrt(variance)
+            image = torch.clamp(image + noise, 0.0, 1.0)
+
+        return image
+
     def __call__(self, results):
         imgs = results["img"]
         assert isinstance(imgs, list), "BEVFormer multi-view expects results['img'] to be a list."
@@ -94,18 +215,14 @@ class RGB2RAWLikeUnprocessWoMosaic:
             # 兼容一些数据集字段命名
             filenames = results.get("filename", None)
 
-        out_imgs = []
-        metas = [] if self.keep_meta else None
+        seeds = []
+        x01_list = []
 
         for i, im in enumerate(imgs):
             x01 = self._to_float01(im)
-
-            # if i == 0:  # 只看第一个view
-            #     print(f"[DBG] before BGR2RGB: dtype={x01.dtype}, min={x01.min():.4f}, max={x01.max():.4f}, mean={x01.mean():.4f}")
-
-            # BGR -> RGB（强烈建议，避免通道语义错位）
             if self.input_is_bgr:
                 x01 = x01[..., ::-1]
+            x01_list.append(x01)
 
             # seed（若拿不到文件名，就退化为 i）
             if isinstance(filenames, list) and i < len(filenames):
@@ -114,60 +231,36 @@ class RGB2RAWLikeUnprocessWoMosaic:
                 seed = self._stable_seed_from_filename(filenames + f"#{i}")
             else:
                 seed = (self.base_seed + i) & 0x7fffffff
+            seeds.append(seed)
 
-            ret = self._call_unprocess(x01, seed)
+        out_imgs = []
+        metas = [] if self.keep_meta else None
 
-            # 兼容两类返回：1) 直接返回img；2) 返回(img, meta)或(img, meta, ...)
-            if isinstance(ret, (tuple, list)):
-                rawlike = ret[0]
-                meta = ret[1:] if len(ret) > 1 else None
-            else:
-                rawlike = ret
-                meta = None
-
-            rawlike = np.asarray(rawlike, dtype=np.float32)
-
-            # if i == 0:
-            #     print(f"[DBG] after unprocess: dtype={rawlike.dtype}, min={rawlike.min():.4f}, max={rawlike.max():.4f}, mean={rawlike.mean():.4f}")
-            #     print(f"[DBG] after unprocess per-channel mean: {rawlike.reshape(-1,3).mean(axis=0)}")
-
+        if self.backend == "torch":
+            batch = np.stack(x01_list, axis=0)
+            rawlike = self._unprocess_batch_torch(batch, seeds)
             if self.clip:
-                rawlike = np.clip(rawlike, 0.0, 1.0)
+                rawlike = torch.clamp(rawlike, 0.0, 1.0)
+            rawlike = torch.maximum(rawlike, torch.tensor(self.eps, device=rawlike.device))
+            rawlike = rawlike.detach().cpu().numpy()
+            out_imgs.extend(list(rawlike))
+        else:
+            for x01, seed in zip(x01_list, seeds):
+                ret = self._call_unprocess(x01, seed)
+                if isinstance(ret, (tuple, list)):
+                    rawlike = ret[0]
+                    meta = ret[1:] if len(ret) > 1 else None
+                else:
+                    rawlike = ret
+                    meta = None
 
-            # # ---------------- DEBUG SAVE (only once) ----------------
-            # # 只在第一个样本的第一个 view 保存三张对比图，避免刷屏/频繁写盘
-            # if i == 0 and (not hasattr(self, "_saved_dbg")):
-            #     self._saved_dbg = True
-            #     os.makedirs("vis_dbg", exist_ok=True)
-
-            #     # 0) 原始输入图（im 通常是BGR, 0~255）
-            #     im_bgr = im.copy()
-            #     if im_bgr.dtype != np.uint8:
-            #         im_bgr = np.clip(im_bgr, 0, 255).astype(np.uint8)
-            #     cv2.imwrite("vis_dbg/0_input_bgr.jpg", im_bgr)
-
-            #     # 1) RAW-like 线性域直接可视化（rawlike 是 RGB, [0,1]）
-            #     raw01 = np.clip(rawlike, 0.0, 1.0).astype(np.float32)
-            #     raw_linear_bgr = (raw01[..., ::-1] * 255.0).clip(0, 255).astype(np.uint8)  # RGB->BGR for cv2
-            #     cv2.imwrite("vis_dbg/1_rawlike_linear_bgr.jpg", raw_linear_bgr)
-
-            #     # 2) RAW-like 转回 sRGB 再可视化（更接近“正常观感”）
-            #     srgb01 = linear_to_srgb(raw01)
-            #     srgb_bgr = (srgb01[..., ::-1] * 255.0).clip(0, 255).astype(np.uint8)
-            #     cv2.imwrite("vis_dbg/2_rawlike_to_srgb_bgr.jpg", srgb_bgr)
-
-            #     print("[DBG] Saved visualization images to ./vis_dbg/")
-            # # --------------------------------------------------------
-
-            rawlike = np.maximum(rawlike, self.eps)
-
-            # if i == 0:
-            #     print(f"[DBG] after clip/eps: min={rawlike.min():.6f}, max={rawlike.max():.6f}, mean={rawlike.mean():.6f}")
-            #     print(f"[DBG] has_nan={np.isnan(rawlike).any()}, has_inf={np.isinf(rawlike).any()}")
-
-            out_imgs.append(rawlike)
-            if self.keep_meta:
-                metas.append(meta)
+                rawlike = np.asarray(rawlike, dtype=np.float32)
+                if self.clip:
+                    rawlike = np.clip(rawlike, 0.0, 1.0)
+                rawlike = np.maximum(rawlike, self.eps)
+                out_imgs.append(rawlike)
+                if self.keep_meta:
+                    metas.append(meta)
 
         results["img"] = out_imgs
         if self.keep_meta:
