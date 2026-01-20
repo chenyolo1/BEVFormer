@@ -10,6 +10,7 @@ from mmdet.models import DETECTORS
 from mmdet3d.core import bbox3d2result
 from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
+from projects.mmdet3d_plugin.bevformer.isp.adaptive_module import AdaptiveModule
 import time
 import copy
 import numpy as np
@@ -40,7 +41,8 @@ class BEVFormer(MVXTwoStageDetector):
                  train_cfg=None,
                  test_cfg=None,
                  pretrained=None,
-                 video_test_mode=False
+                 video_test_mode=False,
+                 adaptive_module_cfg=None,
                  ):
 
         super(BEVFormer,
@@ -53,6 +55,9 @@ class BEVFormer(MVXTwoStageDetector):
             True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
         self.fp16_enabled = False
+        self.adaptive_module = None
+        if adaptive_module_cfg is not None:
+            self.adaptive_module = AdaptiveModule(**adaptive_module_cfg)
 
         # temporal
         self.video_test_mode = video_test_mode
@@ -63,6 +68,13 @@ class BEVFormer(MVXTwoStageDetector):
             'prev_angle': 0,
         }
 
+    def _apply_adaptive_module(self, img):
+        if img.dim() == 5:
+            batch_size, num_cams, channels, height, width = img.size()
+            img = img.reshape(batch_size * num_cams, channels, height, width)
+            img = self.adaptive_module(img)
+            return img.reshape(batch_size, num_cams, channels, height, width)
+        return self.adaptive_module(img)
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         """Extract features of images."""
@@ -79,6 +91,8 @@ class BEVFormer(MVXTwoStageDetector):
             elif img.dim() == 5 and img.size(0) > 1:
                 B, N, C, H, W = img.size()
                 img = img.reshape(B * N, C, H, W)
+            if self.adaptive_module is not None:
+                img = self._apply_adaptive_module(img)
             if self.use_grid_mask:
                 img = self.grid_mask(img)
 

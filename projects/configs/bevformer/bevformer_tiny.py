@@ -51,6 +51,12 @@ model = dict(
     type='BEVFormer',
     use_grid_mask=True,
     video_test_mode=True,
+    adaptive_module_cfg=dict(
+        in_ch=3,
+        nf=32,
+        tm_pts_num=8,
+        gamma_range=[1.0, 4.0],
+    ),
     pretrained=dict(img='ckpts/resnet50-0676ba61.pth'),
     img_backbone=dict(
         type='ResNet',
