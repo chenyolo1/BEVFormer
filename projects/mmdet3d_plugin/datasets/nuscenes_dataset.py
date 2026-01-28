@@ -206,7 +206,7 @@ class CustomNuScenesDataset(NuScenesDataset):
         output_dir = osp.join(*osp.split(result_path)[:-1])
 
         eval_set_map = {
-            'v1.0-mini': 'mini_val',
+            'v1.0-mini': 'mini_train',
             'v1.0-trainval': 'val',
         }
         self.nusc_eval = NuScenesEval_custom(

@@ -5,6 +5,7 @@ from .formating import CustomDefaultFormatBundle3D
 from .augmentation import (CropResizeFlipImage, GlobalRotScaleTransImage)
 from .dd3d_mapper import DD3DMapper
 from .rgb2rawlike_unprocess import RGB2RAWLikeUnprocessWoMosaic
+from .rawlike_to_srgb_isp import RAWLikeToSRGBISP
 
 __all__ = [
     'PadMultiViewImage', 'NormalizeMultiviewImage', 
@@ -12,4 +13,5 @@ __all__ = [
     'RandomScaleImageMultiViewImage',
     'CropResizeFlipImage', 'GlobalRotScaleTransImage',
     'DD3DMapper',
+    'RAWLikeToSRGBISP',
 ]

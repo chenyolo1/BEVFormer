@@ -152,14 +152,29 @@ class RGB2RAWLikeUnprocessWoMosaic:
         blue_gain_list = []
         noise_shot_list = []
         noise_read_list = []
+        metas = [] if self.keep_meta else None
 
         for seed in seeds:
             rng = np.random.RandomState(seed) if self.deterministic else np.random
-            rgb2cam_list.append(self._random_ccm_np(rng))
+            rgb2cam = self._random_ccm_np(rng)
+            rgb2cam_list.append(rgb2cam)
             rgb_gain, red_gain, blue_gain = self._random_gains_np(rng)
             rgb_gain_list.append(rgb_gain)
             red_gain_list.append(red_gain)
             blue_gain_list.append(blue_gain)
+            if self.keep_meta:
+                cam2rgb = np.linalg.inv(rgb2cam)
+                metas.append(
+                    {
+                        "cam2rgb": cam2rgb,
+                        "rgb_gain": rgb_gain,
+                        "red_gain": red_gain,
+                        "blue_gain": blue_gain,
+                        "cfa": "RGGB",
+                        "gain": 0.9,
+                        "noise": (0.0, 0.0),
+                    }
+                )
             if add_noise:
                 shot = rng.uniform(0.0001, 0.012)
                 log_shot = np.log(shot)
@@ -203,6 +218,8 @@ class RGB2RAWLikeUnprocessWoMosaic:
             noise = torch.randn_like(image) * torch.sqrt(variance)
             image = torch.clamp(image + noise, 0.0, 1.0)
 
+        if self.keep_meta:
+            return image, metas
         return image
 
     def __call__(self, results):
@@ -238,12 +255,18 @@ class RGB2RAWLikeUnprocessWoMosaic:
 
         if self.backend == "torch":
             batch = np.stack(x01_list, axis=0)
-            rawlike = self._unprocess_batch_torch(batch, seeds)
+            rawlike_ret = self._unprocess_batch_torch(batch, seeds)
+            if isinstance(rawlike_ret, (tuple, list)):
+                rawlike, meta_list = rawlike_ret
+            else:
+                rawlike, meta_list = rawlike_ret, None
             if self.clip:
                 rawlike = torch.clamp(rawlike, 0.0, 1.0)
             rawlike = torch.maximum(rawlike, torch.tensor(self.eps, device=rawlike.device))
             rawlike = rawlike.detach().cpu().numpy()
             out_imgs.extend(list(rawlike))
+            if self.keep_meta:
+                metas.extend(meta_list if meta_list is not None else [])
         else:
             for x01, seed in zip(x01_list, seeds):
                 ret = self._call_unprocess(x01, seed)

@@ -51,12 +51,7 @@ model = dict(
     type='BEVFormer',
     use_grid_mask=True,
     video_test_mode=True,
-    adaptive_module_cfg=dict(
-        in_ch=3,
-        nf=32,
-        tm_pts_num=8,
-        gamma_range=[1.0, 4.0],
-    ),
+    adaptive_module_cfg=None,
     pretrained=dict(img='ckpts/resnet50-0676ba61.pth'),
     img_backbone=dict(
         type='ResNet',
@@ -189,24 +184,40 @@ train_pipeline = [
         clip=True,
         deterministic=False,       # 训练允许随机；如果你想完全可复现可设True
         base_seed=0,
-        keep_meta=False,
+        keep_meta=True,
         import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
         backend='torch',
         device='cuda',
     ),
 
-    # dict(type='PhotoMetricDistortionMultiViewImage'), # 先关掉，面向sRGB
+    dict(
+        type='RAWLikeToSRGBISP',
+        input_is_bgr=False,
+        output_is_bgr=True,
+        backend='torch',
+        device='cuda',
+        output_backend='numpy',
+        output_range='255',
+        debug_save_dir='work_dirs/isp_debug',
+        debug_save_count=5,
+        debug_prefix='train',
+        apply_tone_mapping=True,
+        apply_brightness_comp=True,
+        clip=True,
+    ),
+
+    dict(type='PhotoMetricDistortionMultiViewImage'),
 
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
 
-    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
     # 建议先用 identity normalize 保证链路稳定
-    dict(type='NormalizeMultiviewImage',
-         mean=[0.0, 0.0, 0.0],
-         std=[1.0, 1.0, 1.0],
-         to_rgb=False),  # 上面 transform 已输出 RGB
+    # dict(type='NormalizeMultiviewImage',
+    #      mean=[0.0, 0.0, 0.0],
+    #      std=[1.0, 1.0, 1.0],
+    #      to_rgb=False),  # 上面 transform 已输出 RGB
 
 
     dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
@@ -224,17 +235,33 @@ test_pipeline = [
         clip=True,
         deterministic=True,       # 训练允许随机；如果你想完全可复现可设True
         base_seed=12345,
-        keep_meta=False,
+        keep_meta=True,
         import_mode='vendored', # 若你拷贝进工程则改成 'vendored'
         backend='torch',
         device='cuda',
     ),
 
-    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='NormalizeMultiviewImage',
-         mean=[0.0, 0.0, 0.0],
-         std=[1.0, 1.0, 1.0],
-         to_rgb=False),  # 上面 transform 已输出 RGB
+    dict(
+        type='RAWLikeToSRGBISP',
+        input_is_bgr=False,
+        output_is_bgr=True,
+        backend='torch',
+        device='cuda',
+        output_backend='numpy',
+        output_range='255',
+        debug_save_dir='work_dirs/isp_debug',
+        debug_save_count=5,
+        debug_prefix='test',
+        apply_tone_mapping=True,
+        apply_brightness_comp=True,
+        clip=True,
+    ),
+
+    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    # dict(type='NormalizeMultiviewImage',
+    #      mean=[0.0, 0.0, 0.0],
+    #      std=[1.0, 1.0, 1.0],
+    #      to_rgb=False),  # 上面 transform 已输出 RGB
    
     dict(
         type='MultiScaleFlipAug3D',
