@@ -47,10 +47,8 @@ bev_h_ = 50
 bev_w_ = 50
 queue_length = 3 # each sequence contains `queue_length` frames.
 
+
 model = dict(
-    type='BEVFormer',
-    use_grid_mask=True,
-    model = dict(
     type='BEVFormer',
     use_grid_mask=True,
     rawlike_adapter=dict(
