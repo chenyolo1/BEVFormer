@@ -195,12 +195,12 @@ train_pipeline = [
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=class_names),
 
-    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    # 建议先用 identity normalize 保证链路稳定
-    dict(type='NormalizeMultiviewImage',
-         mean=[0.0, 0.0, 0.0],
-         std=[1.0, 1.0, 1.0],
-         to_rgb=False),  # 上面 transform 已输出 RGB
+    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    # # 建议先用 identity normalize 保证链路稳定
+    # dict(type='NormalizeMultiviewImage',
+    #      mean=[0.0, 0.0, 0.0],
+    #      std=[1.0, 1.0, 1.0],
+    #      to_rgb=False),  # 上面 transform 已输出 RGB
 
 
     dict(type='RandomScaleImageMultiViewImage', scales=[0.5]),
@@ -224,11 +224,11 @@ test_pipeline = [
         device='cuda',
     ),
 
-    # dict(type='NormalizeMultiviewImage', **img_norm_cfg),
-    dict(type='NormalizeMultiviewImage',
-         mean=[0.0, 0.0, 0.0],
-         std=[1.0, 1.0, 1.0],
-         to_rgb=False),  # 上面 transform 已输出 RGB
+    dict(type='NormalizeMultiviewImage', **img_norm_cfg),
+    # dict(type='NormalizeMultiviewImage',
+    #      mean=[0.0, 0.0, 0.0],
+    #      std=[1.0, 1.0, 1.0],
+    #      to_rgb=False),  # 上面 transform 已输出 RGB
    
     dict(
         type='MultiScaleFlipAug3D',
@@ -248,7 +248,7 @@ test_pipeline = [
 
 data = dict(
     samples_per_gpu=1,
-    workers_per_gpu=12,
+    workers_per_gpu=16,
     train=dict(
         type=dataset_type,
         data_root=data_root,

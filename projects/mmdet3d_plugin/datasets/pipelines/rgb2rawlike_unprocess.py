@@ -242,6 +242,7 @@ class RGB2RAWLikeUnprocessWoMosaic:
             if self.clip:
                 rawlike = torch.clamp(rawlike, 0.0, 1.0)
             rawlike = torch.maximum(rawlike, torch.tensor(self.eps, device=rawlike.device))
+            rawlike = rawlike * 255.0
             rawlike = rawlike.detach().cpu().numpy()
             out_imgs.extend(list(rawlike))
         else:
@@ -258,6 +259,7 @@ class RGB2RAWLikeUnprocessWoMosaic:
                 if self.clip:
                     rawlike = np.clip(rawlike, 0.0, 1.0)
                 rawlike = np.maximum(rawlike, self.eps)
+                rawlike = rawlike * 255.0
                 out_imgs.append(rawlike)
                 if self.keep_meta:
                     metas.append(meta)
