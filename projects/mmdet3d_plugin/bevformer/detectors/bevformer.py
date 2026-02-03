@@ -10,6 +10,7 @@ from mmdet.models import DETECTORS
 from mmdet3d.core import bbox3d2result
 from mmdet3d.models.detectors.mvx_two_stage import MVXTwoStageDetector
 from projects.mmdet3d_plugin.models.utils.grid_mask import GridMask
+from projects.mmdet3d_plugin.models.utils.rawlike_adapter import RawLikeToSRGBAdapter
 import time
 import copy
 import numpy as np
@@ -26,6 +27,8 @@ class BEVFormer(MVXTwoStageDetector):
 
     def __init__(self,
                  use_grid_mask=False,
+                 rawlike_adapter=None,
+                 img_norm_cfg=None,
                  pts_voxel_layer=None,
                  pts_voxel_encoder=None,
                  pts_middle_encoder=None,
@@ -53,6 +56,14 @@ class BEVFormer(MVXTwoStageDetector):
             True, True, rotate=1, offset=False, ratio=0.5, mode=1, prob=0.7)
         self.use_grid_mask = use_grid_mask
         self.fp16_enabled = False
+        self.rawlike_adapter = None
+        if rawlike_adapter is not None:
+            if isinstance(rawlike_adapter, dict):
+                self.rawlike_adapter = RawLikeToSRGBAdapter(**rawlike_adapter)
+            else:
+                self.rawlike_adapter = rawlike_adapter
+
+        self.img_norm_cfg = img_norm_cfg or {}
 
         # temporal
         self.video_test_mode = video_test_mode
@@ -63,11 +74,46 @@ class BEVFormer(MVXTwoStageDetector):
             'prev_angle': 0,
         }
 
+    def _apply_img_norm(self, img):
+        if not self.img_norm_cfg:
+            return img
+        mean = self.img_norm_cfg.get('mean', None)
+        std = self.img_norm_cfg.get('std', None)
+        to_rgb = self.img_norm_cfg.get('to_rgb', False)
+        scale_factor = self.img_norm_cfg.get('scale_factor', None)
+        if scale_factor is None and mean is not None:
+            if max(mean) > 1.0 and img.max() <= 1.5:
+                scale_factor = 255.0
+        if scale_factor is not None:
+            img = img * float(scale_factor)
+        if to_rgb:
+            img = img[:, [2, 1, 0], :, :]
+        if mean is not None and std is not None:
+            mean = img.new_tensor(mean).view(1, -1, 1, 1)
+            std = img.new_tensor(std).view(1, -1, 1, 1)
+            img = (img - mean) / std
+        return img
+
+    def _apply_rawlike_adapter(self, img):
+        if self.rawlike_adapter is None and not self.img_norm_cfg:
+            return img
+        if img.dim() == 5:
+            b, n, c, h, w = img.size()
+            img = img.reshape(b * n, c, h, w)
+            if self.rawlike_adapter is not None:
+                img = self.rawlike_adapter(img)
+            img = self._apply_img_norm(img)
+            img = img.reshape(b, n, c, h, w)
+            return img
+        if self.rawlike_adapter is not None:
+            img = self.rawlike_adapter(img)
+        return self._apply_img_norm(img)
 
     def extract_img_feat(self, img, img_metas, len_queue=None):
         """Extract features of images."""
         B = img.size(0)
         if img is not None:
+            img = self._apply_rawlike_adapter(img)
             
             # input_shape = img.shape[-2:]
             # # update real input shape of each single img

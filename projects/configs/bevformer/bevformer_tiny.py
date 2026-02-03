@@ -23,8 +23,8 @@ voxel_size = [0.2, 0.2, 8]
 
 
 
-img_norm_cfg = dict(
-    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=True)
+img_norm_cfg = dict(␊
+    mean=[123.675, 116.28, 103.53], std=[58.395, 57.12, 57.375], to_rgb=False)
 
 # For nuScenes we usually do 10-class detection
 class_names = [
@@ -50,6 +50,20 @@ queue_length = 3 # each sequence contains `queue_length` frames.
 model = dict(
     type='BEVFormer',
     use_grid_mask=True,
+    model = dict(
+    type='BEVFormer',
+    use_grid_mask=True,
+    rawlike_adapter=dict(
+        in_channels=3,
+        out_channels=3,
+        init_identity=True,
+        use_gamma=True,
+        gamma_min=0.1,
+        gamma_max=5.0,
+        clamp_min=1e-6,
+        clamp_max=1.0,
+    ),
+    img_norm_cfg=img_norm_cfg,
     video_test_mode=True,
     pretrained=dict(img='ckpts/resnet50-0676ba61.pth'),
     img_backbone=dict(
